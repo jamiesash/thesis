@@ -10,14 +10,6 @@ quak$time <- as.Date(quak$time)
 
 gry <- colvect("grey22", alpha = 0.3)
 
-
-
-quak2 <- read.csv("../data/quakes_2_1997_2023.csv")
-quak2$time <- substr(quak2$time, start = 1, stop = 10)
-quak2$time <- as.Date(quak2$time)
-
-
-
 # STL Filter Example -----------------------------------------------------------
 # Loading packages and all pre-writen functions
 # setwd("C:\\Users\\james\\Desktop\\jamieslife\\analysis")
