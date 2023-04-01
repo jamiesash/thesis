@@ -15,56 +15,9 @@ output:
     code_folding: hide
 ---  
 
-<style type="text/css">  
-/* Note: CSS uses C-style commenting. */
-h1.title{font-size:22px; text-align:center;}
-h4.author{font-size:16px; text-align:center;}
-h4.date{font-size:16px; text-align:center;}
-body{ /* Normal  */ font-size: 13px}
-td {  /* Table   */ font-size: 12px}
-h1 { /* Header 1 */ font-size: 16px}
-h2 { /* Header 2 */ font-size: 14px}
-h3 { /* Header 3 */ font-size: 12px}
-.math{ font-size: 10pt;}
-.hi{ /* hanging indents */ 
-    padding-left:22px; 
-    text-indent:-22px;
-}
-.main-container {
-  max-width: 1000px;
-  margin-left: auto;
-  margin-right: auto;
-}
-blockquote {  
-    padding: 10px 20px;
-    margin: 0 0 20px;
-    font-size: 12px;
-    border-left: 5px solid #eee;
-}
-code.r{ /* code */ 
-       font-size: 12px;
-}
-pre{/*preformatted text*/ 
-    font-size: 12px;
-}
-p.caption {/* figure captions */ 
-    font-size: 1.0em;
-    font-style: italic; 
-} 
-.vscroll-plot {
-    width: 800px;
-    height: 400px;
-    overflow-y: scroll;
-    overflow-x: hidden;
-}
-body {
-text-align: justify}
-</style>
-
 ```{r setup, include=FALSE, message = FALSE}
 source("functions.R")
 source("libraries.R")
-source("blooms.R")
 rasterOptions(maxmemory = 120e+10, memfrac = 0.9)
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -371,8 +324,6 @@ jamie_theme <- function(x,
 sdate = as.Date("2018-01-01")
 edate = as.Date("2019-01-01") 
 
-# lons  = c(-158, -130)
-# lats  = c(23, 34)
 lons = c(-165, -130)
 lats = c( 18,   35)
 e = extent(lons, lats)
@@ -383,8 +334,6 @@ cache_delete_all(force = FALSE)
 # Set variables
 lat_varid = "lat"
 lon_varid = "lon"
-# sdate = as.Date("1997-06-01")
-# edate = as.Date("2021-11-01")
 var = "CHL"
 url = "https://jash:5.Pellegrino@my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D?"
 
@@ -438,43 +387,6 @@ gc()
 
 Loading the data using ERDDAP
 ```{r data, message = FALSE, warning = FALSE}
-# Bloom start and stop dates
-# blooms = read.csv("../data/outfiles/full_sum.csv")
-# subseting just 2018 for case study
-# idx = year(blooms$sdate) == 2018
-# sdate = as.Date(blooms$sdate[idx]) - 16
-# edate = as.Date(blooms$edate[idx]) + 15
-# # lons  = c(-158, -130)
-# # lats  = c(23, 34)
-# lons = c(-165, -130)
-# lats = c( 18,   35)
-# 
-# # cache_list()
-# cache_delete_all(force = FALSE)
-# 
-# # should try loading chla data from ERDDAP. Or just anomaly this in one function 
-# # I need to make sure I'm not saving a fuck tone of files
-# # I'm uploading the large data set for the anomaly calculation
-# chl = loadsat(url = "https://coastwatch.noaa.gov//erddap",
-#               id  = "noaacwNPPN20S3ASCIDINEOFDaily",
-#               lat = lats,
-#               lon = lons,
-#               parameter = c("all"),
-#               sdate = as.Date("2018-02-09"),
-#               edate = as.Date("2022-01-01"),
-#               large = TRUE,
-#               by = 10)
-
-# ppp = loadsat(url = "https://coastwatch.pfeg.noaa.gov/erddap",
-#               id  = "erdMH1pp8day",
-#               lat = lats,
-#               lon = lons,
-#               parameter = c("productivity"),
-#               sdate = as.Date("2018-06-01"),
-#               edate = as.Date("2018-11-15"),
-#               large = FALSE,
-#               by = 10)
-
 fields =  c("temp",
             "temp_qc",
             "temp_adjusted", 
@@ -495,11 +407,6 @@ float = loadfloat(sdate  = sdate,
                   fields = fields,
                   id = "ArgoFloats")
 gc()
-```
-
-Correct oreantation
-```{r}
-# chl = oreant(chl, t1 = TRUE)
 ```
 
 Remove Region around Hawaii. CZ fornow 
@@ -538,63 +445,12 @@ chla_2018 = timesnip(chla, as.Date(sdate), as.Date(edate))
 chlb_2018 = timesnip(chlb, as.Date(sdate), as.Date(edate))
 ```
 
-Process PP: resize ppp to chl and interpolate over clouds
-```{r, eval = FALSE}
-# matches x to y in the time domain
-# match = function(x, y){
-#   ty = getZ(y)
-#   ty = as.numeric(ty)
-#   tx = getZ(x)
-#   tx = as.numeric(tx)
-#   
-#   idx  = which(is.element(tx, ty))
-#   tx   = subset(tx, is.element(tx, ty))
-#   x = raster::subset(x, idx)
-#   x = setZ(x, z = as.Date(tx), name = "time")
-#   x
-# }
-# resample = function(ras, to, method = "bilinear"){
-#   raster::crs(ras) = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
-#   t = getZ(to)
-#   e = extent(to)
-#   extent(ras) = extent(e)
-#   ras = raster::resample(ras,  to, method = method)
-#   extent(ras) = e
-#   ras = setZ(ras, z = as.Date(t), name = "time") 
-#   ras
-#   }
-# 
-# time = getZ(ppp_2018)
-# 
-# chlb_8day = match(chlb_2018, ppp_2018)
-# ppp_2018 = crop(ppp_2018, chlb_8day)
-# extent(ppp_2018) = extent(chlb_8day)
-# 
-# ppp_2018 = resample(ppp_2018, to = chlb_8day)
-# 
-# # interpolate bitch
-# ppp_2018 = approxNA(ppp_2018, rule=2)
-# 
-# # remove coastal effects
-# ppp_2018 = bufcoast(ppp_2018, 
-#                     region = "Hawaiian Islands", 
-#                     path = "../data/USMaritimeLimitsAndBoundariesSHP")
-# 
-# ppp_2018 = setZ(ppp_2018, z = time, name = "time")
-# extent(ppp_2018) = extent(chlb_8day)
-# gc()
-```
-
 Calculate patch area
 ```{r, message = FALSE}
 # integrated = depth integrated
 tsa = bloom_area(chlb_2018)
 # magnitude might like the raw CHL
 tsc = bloom_con(chl_2018, chlb_2018, stat = "mean")
-
-# Need to have a chlb_2018 that's 8 day time snipped
-# calcuates the average pp might want total
-#tsp = bloom_mag(ppp_2018, chlb_8day)
 
 #tsa = area_ts(chla, sdate = sdate, edate = edate, stat = "mean")
 bloom_2018 = data.frame(area = tsa$area, 
@@ -719,6 +575,7 @@ elephants = max(bloom_2018$bio*1000)/ 5.98742 # elephant in t
 
 # Data visualization 
 
+# timeseries
 ```{r, fig.width=5, fig.height=8, message = FALSE, fig.show = "hold",  warning = FALSE, echo = FALSE}
 png(filename="biomass_20230331.png",
     width = 3.5,
@@ -808,45 +665,6 @@ box(which = "plot",
       col = colvect("grey22", alpha = 0.9))
 #dev.off()
 ```
-
-```{r, fig.width=8, fig.height=5}
-wdmap = getMap(resolution = "high")
-
-x = -150
-y = 27
-a = 23*1e05
-r = sqrt(a/pi) 
-r = r/110.574 #latitude to meters
-
-plot(x, y, 
-     ylim = c(17, 37), 
-     xlim = c(-170, -125),
-     pch = 19,
-     ylab = "Latitude",
-     xlab = "Longitude")
-draw.circle(x, 
-            y, 
-            r,
-            border = colvect("grey22", alpha = 0.6),
-            lwd = 2,
-            nv  = 500,
-            lty = 2)
-plot(wdmap, 
-     xlim = e[1:2], 
-     ylim = e[3:4], 
-     asp = 1, 
-     bg = "black", 
-     border = "black", 
-     col = "black", 
-     #wrap = c(-180, 180), 
-     add = TRUE)
-grid(nx = NULL, # X-axis divided in two sections
-     ny = NULL, # Y-axis divided in three sections
-     lty = 2, 
-     col = colvect(c("gray69"), alpha = 0.5), lwd = 1)
-box(which = "plot", lty = "solid", lwd = 3, col = colvect("grey22", alpha = 0.9))
-```
-
 
 ### Mixed Layer Depth
 ```{r, message = FALSE, fig.show = "hold", out.width = "90%",  warning = FALSE}
