@@ -1,5 +1,5 @@
 ---
-title: "Untitled"
+title: "HPLC CHL calibration"
 author: "Jamie Ash"
 date: "2022-11-06"
 output: html_document
@@ -11,10 +11,11 @@ output: html_document
 # setwd("C:\\Users\\james\\Desktop\\jamieslife\\analysis")
 source("libraries.R")
 source("functions.R")
+library(MASS)
+library(ggeffects)
 rasterOptions(maxmemory = 100e+10)
 
 lons = c(-158.25, -157.25)
-#lons = c(-158.05, -157.95)
 lats = c( 22.7,   22.8)
 e = extent(lons, lats)
 
@@ -86,19 +87,6 @@ gc()
 ```
 
 ```{r, warning=FALSE}
-# I'm uploading the large data set for the anomaly calculation
-
-# nope it's missing data. Could be fucking me for the sla matchup analysis too
-# chl = load_nc(path = "..//data//chl//",
-#               patt = "chl_20020101_20210105.nc",
-#               vars = c("lats", "lons", "value", "time"),
-#               origin = "1970-01-01")
-# # I saved chl incorrectly
-# c_e = extent(chl)
-# extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
-# rm(c_e)
-# gc()
-# 
 lons = c(-158.1, -157.95)
 lats = c( 22.65,   22.8)
 e = extent(lons, lats)
@@ -106,23 +94,7 @@ chl = raster::crop(chl, e)
 dim(chl)
 ```
 
-checking oreantation of CHL
-```{r}
-# c_e = extent(chl)
-# extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
-# temp = calc(chl[[1:16]], fun = mean, na.rm = TRUE)
-# 
-# lons = c(-160, -155)
-# lats = c( 20,   25)
-# e = extent(lons, lats)
-# chl = raster::crop(temp, e)
-# 
-# plot(chl)
-```
-
-
 load hplc data
-
 ```{r, warning=FALSE}
 # Load the HPLC Data text file from HOT_DOGS webserver
 hplc <- data.frame(fread("..//data//hotdogs//HPLC_HOT_19881001_20211203.txt", 
@@ -134,7 +106,6 @@ colnames(hplc) <- c("id", "date", "time", "press", "chl", "NA")
 
 Could try apply a gassion running smoother like I did for the magnitude
 satelite data is gotten noisy in the last few years
-
 ```{r, warning=FALSE}
 c_t = getZ(chl)
 c_u = cellStats(chl, stat = mean, na.rm = TRUE)
@@ -151,7 +122,6 @@ sat$ID = as.factor(sat$ID)
 
 processing HPLC data
 I should still probably average HPLC data from the same day across depth
-
 ```{r}
 # convert the odd datetype to Postix
 time   = as.POSIXct(hplc$date, format="%m%d%y")
@@ -191,11 +161,6 @@ sat = sat[, c("chl", "month", "ID", "time")]
 
 Fixin date times
 ```{r}
-
-# if I match hplc to sat I just need to make sure the cardinality of hplc is 
-# idx = hplc$time < max(sat$time)
-# hplc = hplc[idx, ]
-
 # both need to be true and I'm gutch
 max(hplc$time) < max(sat$time)
 min(hplc$time) > min(sat$time)
@@ -218,24 +183,14 @@ for(i in idx){
   cu[j] = mean(sat$chl[(i-1):(i+1)], na.rm = TRUE)
 }
 
-
-
 # there should not be any duplicated values
 duplicated(idx)
 
 calib = data.frame(time = hplc$time, sat_chl = cu, hplc_chl = hplc$chl)
-
-# I thin this could be matching points far in time
-# calib = merge(sat, hplc, by = "time", sort = FALSE)
- 
-# calib = calib[, c("time", "chl.x", "chl.y")]
-# colnames(calib) = c("time", "sat_chl", "hplc_chl")
 ```
 
 ```{r, eval = FALSE}
 # GLM ussing Gamma Log transform x ---------------------------------------------
-library(MASS)
-library(ggeffects)
 
 x <- calib$hplc_chl
 y <- calib$sat_chl
@@ -312,7 +267,6 @@ boxit(x2 = box_df$month,
       mar = c(5, 5, 3, 3))
 ```
 
-
 plotting the scatter by itself
 ```{r, fig.asp=1}
 n = length(y) - sum(is.na(y))
@@ -332,27 +286,6 @@ plotit(x = x, y = y, abline = c(m, b, r2),
 #title("HPLC to CHLsat Comparison and CHL Seasonality", line = 1, adj = 0, cex.main = 1.5)
 text(0.2, 0.18, labels = paste("n =", as.character(n), sep = " "))
 ```
-
-```{r}
-# calcualting a chl anomaly
-# hplc$chlr <- with(hplc, chl - ave(chl, month, na.rm = TRUE))
-# sat$chlr <- with(sat, chl - ave(sat$chl, sat$month, 
-#                                 FUN = function(x) mean(x, na.rm = TRUE)))
-# 
-# glmGamma <- glm(y ~ x, data = data, family = gaussian)
-# glm_0 <- glm(y ~ 1, data = data, family = gaussian)
-
-```
-
-```{r}
-```
-
-```{r}
-```
-
-```{r}
-```
-
 
 
 
