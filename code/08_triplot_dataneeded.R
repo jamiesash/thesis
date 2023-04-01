@@ -1,3 +1,5 @@
+# USING PREDOWNOADED DATA
+
 # load xyz table ---------------------------------------------------------------
 source("functions.R")
 source("libraries.R")
@@ -7,6 +9,7 @@ xyz = read.csv("..\\data\\xyz_2010_2021_20230218.csv")
 
 head(xyz)
 gc()
+
 # ------------------------------------------------------------------------------
 # plotting the data
 scale <- function(x, to, from){   

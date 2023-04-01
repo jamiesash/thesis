@@ -5,14 +5,11 @@ date: "2022-10-28"
 output: pdf_document
 ---
 
-So this is totally fucked because FSLE and SLA don't have crs given with their 
-nc files from AVISO. Killing me. I also can't find it in their metadata on their 
-webpage. I can get the same SLA from CMEMS and it has a crs but not FSLE. 
+I'm still using pre-downloaded data here... 
 
 ```{r setup, include=FALSE, message = FALSE}
 source("functions.R")
 source("libraries.R")
-source("blooms.R")
 rasterOptions(maxmemory = 120e+10, memfrac = 0.9)
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -140,29 +137,13 @@ jamie_theme <- function(x,
 
 ```
 
-Downlaoding and saving CHL data globcolor
-```{r, eval = FALSE}
-# # I'm uploading the large data set for the anomaly calculation
-# chl = opendap(var = "CHL",
-#               url = "https://jash:5.Pellegrino@my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D?",
-#               sdate = sdate,
-#               edate = edate,
-#               lons = lons,
-#               lats = lats
-#               )
-# savenc(chl,
-#        sdir   = "../data/chl",
-#        ncname = "chl_20180624_20181118",
-#        dlname = "chl",
-#        uni    = "mg_m3")
-```
-
 load data
 ```{r}
 chl = load_nc(path = "..\\data\\chl\\",
               patt = "chl_20180624_20181118.nc",
               origin = "1970-01-01",
               vars = c("lats", "lons", "value","time"))
+
 # I saved chl incorrectly
 c_e = extent(chl)
 extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
