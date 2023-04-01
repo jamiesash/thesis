@@ -1,0 +1,812 @@
+---
+title: "Untitled"
+author: "Jamie Ash"
+date: "2023-02-22"
+output: html_document
+---
+
+```{r setup, include=FALSE, message = FALSE}
+source("functions.R")
+source("libraries.R")
+source("blooms.R")
+library(animation)
+library("rerddap")
+library("akima")
+library("dplyr")
+library("ggplot2")
+library("mapdata")
+library("ncdf4")
+library("plot3D")
+library(IndexNumR)
+library(imputeTS)
+library(sp)
+#library(rgdal)
+library(raster)
+library("plotrix") 
+library(rasterVis)
+rasterOptions(maxmemory = 120e+10, memfrac = 0.9)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+functions
+```{r}
+dap = function(sdate, edate, e, 
+               id = 'jplMURSST41anom1day', 
+               url = "https://coastwatch.pfeg.noaa.gov/erddap/",
+               var = c("sstAnom", "latitude", "longitude", "time")) {
+  # input is a datetime and an extent. It grabs that raster
+  dap_that_ass = function(x, data_info, e){
+    data = griddap(data_info, 
+                   latitude = e[3:4], 
+                   longitude = e[1:2], 
+                   time = c(as.character(x),as.character(x)), 
+                   fields = 'all')
+    data = nc_open(data$summary$filename)
+    ras  = ncvar_get(data, varid = var[1])
+    lats = ncvar_get(data, varid = var[2])
+    lons = ncvar_get(data, varid = var[3])
+    time = ncvar_get(data, varid = var[4])
+    time = as.Date(as.POSIXct(time, origin = "1970-01-01"))
+    nc_close(data)
+    rm(data)
+    
+    ras = raster(ras)
+    extent(ras) = extent(min(lons), max(lons), min(lats), max(lats))
+    ras = setZ(ras, z = time, name = "time")
+    crs(ras) = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+    ras
+    }
+  
+  time = seq(sdate, edate, by = 1)
+  time = as.list(time)
+  
+  data_info = info(id, 
+                   url = url)
+    
+  ras  = lapply(time, FUN = dap_that_ass, data_info = data_info, e = e)
+  time = lapply(ras, getZ)
+  time = unlist(time)
+  time = as.Date(time)
+  ext    = lapply(ras, extent)
+  ras  = stack(ras)
+  extent(ras) = ext[[1]]
+  ras = setZ(ras, z= time, name = "time")
+  ras
+  }
+```
+
+load that data bb
+```{r, message = FALSE}
+lons = c(-175, -125)
+lats = c(18,   40)
+e = extent(lons, lats)
+sdate = as.Date("2018-07-05")
+edate = as.Date("2018-10-15")
+
+ssta = dap(sdate = sdate, 
+           edate = edate, 
+           e = e,
+           id = 'jplMURSST41anom1day',
+           var = c("sstAnom", "latitude", "longitude", "time"))
+ssta = oreant(ssta, flip = "y", t1 = TRUE)
+
+# now for chl
+sdate = as.Date("2018-06-01")
+edate = as.Date("2022-12-30")
+
+chl = dap(sdate = sdate, 
+          edate = edate, 
+          e = e,
+          var = c("chlor_a", "latitude", "longitude", "time"),
+          id = 'nesdisVHNnoaaSNPPnoaa20chlaGapfilledDaily')
+chl = oreant(chl, t1 = TRUE)
+gc()
+```
+
+```{r}
+fsle = load_nc(path = "C:\\Users\\james\\Desktop\\jamieslife\\data\\infiles\\case_study\\fsle\\",
+               patt = "fsle_po_2018.nc")
+extent(fsle) = extent(fsle) - c(360, 360, 0 ,0)
+gc()
+
+sla = load_nc(path = "C:\\Users\\james\\Desktop\\jamieslife\\data\\infiles\\case_study\\sla\\",
+              patt = "2010_2021_sla.nc",
+              vars = c("latitude", "longitude", "sla", "time"))
+gc()
+```
+
+fix oreantation
+```{r}
+fsle = oreant(fsle, flip = "y", t1 = TRUE)
+gc()
+sla  = oreant(sla, flip = "y", t1 = TRUE)
+gc()
+```
+
+Crop all to the same extent
+```{r crop}
+e = extent(ssta)
+fsle = raster::crop(fsle, e)
+sla  = raster::crop(sla,  e)
+gc()
+```
+
+Calculate CHL anomaly
+```{r, message = FALSE, warning = FALSE, cache = FALSE}
+# I receive an warning when detrending for cells of all NA values (hawaii)
+# chl anom. calc. needs at least one full year to work correctly
+chla = anomalize(chl, detrend = FALSE)
+slaa = anomalize(sla, detrend = FALSE)
+gc(verbose = FALSE, full = TRUE)
+```
+
+
+```{r}
+# by time
+sdate = as.Date("2018-07-05")
+edate = as.Date("2018-10-15")
+chl  = timesnip(chl,  sdate, edate)
+chla = timesnip(chla,  sdate, edate)
+slaa = timesnip(slaa,  sdate, edate)
+sla  = timesnip(sla,  sdate, edate)
+ssta  = timesnip(ssta,  sdate, edate)
+fsle = timesnip(fsle,  sdate, edate)
+gc()
+```
+
+
+Make FSLE and CHL them the same time domain. Make FSLE same temporal resolution as CHL
+```{r}
+match = function(x, y){
+  ty = getZ(y)
+  ty = as.numeric(ty)
+  tx = getZ(x)
+  tx = as.numeric(tx)
+  
+  idx  = which(is.element(tx, ty))
+  tx   = subset(tx, is.element(tx, ty))
+  x = raster::subset(x, idx)
+  x = setZ(x, z = as.Date(tx), name = "time")
+  x
+}
+
+fsle = match(x = fsle, y = chla)
+slaa = match(x = slaa, y = chla)
+sla = match(x = sla, y = chla)
+gc()
+```
+removing coastal effects
+```{r}
+ssta = bufcoast(ssta)
+gc()
+chla = bufcoast(chla)
+chl = bufcoast(chl)
+gc()
+slaa = bufcoast(slaa)
+sla = bufcoast(sla)
+fsle = bufcoast(fsle)
+gc()
+```
+
+function for plotting
+```{r, eval = FALSE, fig.width = 12, fig.height = 7.5}
+map = function(ras, colmap, zlim,
+         main = "Sea surface temperature anomaly"){
+  
+  ras   <- raster::clamp(ras, zlim[1], zlim[2])
+  wdmap <- getMap(resolution = "high")
+  e = extent(ras)
+  
+  image(ras,
+      xlim = e[1:2],
+      ylim = e[3:4],
+      zlim = zlim,
+      xlab = "",
+      ylab = "",
+      col = colmap,
+      axes = FALSE)
+
+  plot(wdmap,
+       xlim = e[1:2],
+       ylim = e[3:4],
+       asp = 1,
+       bg = "black",
+       border = "black",
+       col = "black",
+       #wrap = c(-180, 180),
+       add = TRUE)
+  
+  axis(side = 2, 
+       las = 2, 
+       lwd = 2, 
+       at = c(18, 22, 26, 30, 34, 38),
+       mgp = c(1, 0.75, 0), 
+       cex.axis = 1.25)
+  
+  axis(side = 1, 
+       las = 1, 
+       lwd = 2,
+       mgp = c(2, 1, 0),    
+       at = c(-170, -160, -150, -140, -130),
+       cex.axis = 1.25)
+  
+  #title(main = list(main), line = line,  adj = adj, cex.main = cex.main)
+  title(main = main, cex.main = 1.75, line = 0.25, adj = 0)
+  
+  title(ylab = "Latitude", cex.lab = 1.5, line = 2.5)
+  
+  title(xlab = "Longitude", cex.lab = 1.5, line = 2.5)
+  
+  box(which = "plot",
+          lty = "solid",
+          lwd = 3,
+          col = colvect("grey12", alpha = 0.9))
+}
+```
+
+
+```{r}
+fronts = ssta[[75]]
+
+# making negative values positive
+idx = fronts < 0
+fronts[idx] = fronts[idx] * -1
+
+# making 0 the greatest value
+
+test = scale(values(fronts), from = 1, to = 0)
+
+vals = scale(values(fronts), from = 1, to = 0)
+values(fronts) = vals
+
+
+plot(fronts)
+```
+
+
+plotting ssta and chl
+```{r, fig.width=12, fig.height=7}
+drawPalette(zlim = c(-0.05, 0.15), 
+          col = cmocean("rain")(20),
+          plot = TRUE,
+          pos  = 4,
+          zlab = "Chlorophyll Anomaly")
+par(mar = c(5, 4, 2, 5))
+map(chla[[75]],
+    zlim = c(-0.05, 0.15),
+    colmap = cmocean("rain")(50),
+    main = paste("Chlorophyll Anomaly ", getZ(chla[[75]]), sep = ""))
+
+drawPalette(zlim = c(-1.75, 3.57), 
+            col = cmocean("balance")(20),
+            plot = TRUE,
+            pos  = 4,
+            zlab = "Temperature Anomaly")
+par(mar = c(5, 4, 2, 5))
+map(ssta[[75]], 
+    colmap = cmocean("balance")(50),
+    zlim = c(-1.75, 3.75),
+    main = paste("Sea Surface Temperature Anomaly ", getZ(ssta[[75]]), sep = ""))
+```
+
+cutting down the ssta data for statistics not mapping
+```{r}
+# by extent
+lons = c(-155, -130)
+lats = c(22,   34)
+e = extent(lons, lats)
+x = raster::crop(ssta, e)
+y = raster::crop(chla, e)
+z = raster::crop(slaa, e)
+s = raster::crop(sla, e)
+w = raster::crop(fsle, e)
+q = raster::crop(chl, e)
+
+# by time
+sdate = as.Date("2018-07-01")
+edate = as.Date("2018-10-07")
+x = timesnip(x,  sdate, edate)
+y = timesnip(y,  sdate, edate)
+z = timesnip(z,  sdate, edate)
+w = timesnip(w,  sdate, edate)
+s = timesnip(s,  sdate, edate)
+q = timesnip(q,  sdate, edate)
+gc()
+```
+
+making same size for statistics
+```{r resample, warning = FALSE}
+resample = function(ras, to, method = "bilinear"){
+  raster::crs(ras) = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
+  time = getZ(ras)
+  e = extent(to)
+  extent(ras) = extent(e)
+  ras = raster::resample(ras,  to, method = method)
+  extent(ras) = e
+  ras = setZ(ras, z = as.Date(time), name = "time") 
+  ras
+}
+
+z = resample(z, to = y, method = "ngb")
+gc()
+
+w = resample(w, to = y, method = "ngb")
+gc()
+
+x = resample(x, to = y, method = "ngb")
+gc()
+
+q = resample(q, to = y, method = "ngb")
+gc()
+
+s = resample(s, to = y, method = "ngb")
+gc()
+
+extent(x) = extent(y)
+extent(z) = extent(y)
+extent(w) = extent(y)
+extent(q) = extent(y)
+extent(s) = extent(y)
+```
+
+Create table
+```{r, warning = FALSE}
+# this is much simpler code but may take a lot of memory
+vectorize = function (ras) {
+  df = cbind(coordinates(ras), values(ras))
+  df = data.frame(df)
+  time = getZ(ras)
+  time = rep(time, times = nrow(df))
+  df$time = time
+  colnames(df) = c("lon", "lat", "value", "time")
+  df
+  }
+
+ras2tbl = function(ras, name = "value"){
+  ras_l = list()
+  for(i in 1:dim(ras)[3]) ras_l[[i]] = ras[[i]]
+  
+  ras_df = lapply(ras_l, vectorize)
+  rm(ras_l)
+  ras_df = do.call(rbind, ras_df)
+  ras_df
+  }
+
+xdf = ras2tbl(x, name = "value")
+gc()
+
+ydf = ras2tbl(y, name = "value")
+gc()
+
+zdf  = ras2tbl(z,  name = "value")
+gc()
+
+wdf  = ras2tbl(w,  name = "value")
+gc()
+
+qdf  = ras2tbl(q,  name = "value")
+gc()
+
+sdf  = ras2tbl(s,  name = "value")
+gc()
+
+# create one data frame
+xyz = data.frame(time = xdf$time, 
+                 lat  = xdf$lat, 
+                 lon  = xdf$lon, 
+                 ssta = xdf$value,
+                 fsle = wdf$value,
+                 slaa  = zdf$value,
+                 sla   = sdf$value,
+                 chla  = ydf$value,
+                 chl   = qdf$value
+                 )
+
+rm(xdf, ydf, zdf, wdf, qdf, sdf)
+gc() 
+
+xyz = xyz[!is.na(xyz$sla),]
+xyz = xyz[!is.na(xyz$fsle),]
+
+xyz$fsle = xyz$fsle * -1
+gc()
+```
+
+Preparing a data frame for the GAM
+```{r}
+# remove effects of clouds
+df = xyz
+
+# Cleaning up the data set
+df  = xyz[!is.na(df$chla),]
+df$time = as.Date(df$time)
+gc()
+
+# Converting lat lon to distance
+xy   = cbind(df$lat, df$lon)
+utms = rgdal::project(xy, "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0") # need to change zones
+df$northing = utms[, 1]/1000
+df$easting  = utms[, 2]/1000
+df$doy = as.numeric(format(df$time, '%j'))
+
+df = df[, c("chla", "chl", "ssta", "sla", "slaa", "fsle", "doy", "easting", "northing")]
+
+# cutting the end date back
+# idx = df$doy < 309
+# df = df[idx, ]
+
+# removing outliers
+
+idx = df$fsle < median(df$fsle) + mad(df$fsle)*10
+df = df[idx, ]
+
+idx = df$slaa < median(df$slaa) + mad(df$slaa)*5
+df = df[idx, ]
+idx = df$sla > median(df$sla) - mad(df$slaa)*5
+df = df[idx, ]
+gc()
+```
+
+perform GAM 
+```{r}
+library(rgdal)
+library(mgcViz)
+
+# Together and the anomaly -----------------------------------------------------
+gam_chla = gam(chla ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = gaussian(link = "identity"))
+
+gc()
+
+gam_ssta = gam(ssta ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing),
+               #method = "REML",
+               data = df,
+               family = gaussian(link = "identity"))
+
+gc()
+
+
+gam_ssta_fsle = gam(ssta ~ s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = gaussian(link = "identity"))
+
+gc()
+
+gam_ssta_sla = gam(ssta ~ s(slaa) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = gaussian(link = "identity"))
+
+gc()
+
+# Together and not anomaly -----------------------------------------------------
+gam_chl = gam(chl ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = Gamma(link = "inverse"))
+
+gc()
+
+# Individualy and not anomaly --------------------------------------------------
+
+gam_chl = gam(chl ~ s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = Gamma(link = "inverse"))
+
+gc()
+
+gam_chl = gam(chl ~ s(slaa) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = Gamma(link = "inverse"))
+
+gc()
+
+gam_ssta = gam(ssta ~ s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = gaussian(link = "identity"))
+
+gc()
+
+gam_ssta = gam(ssta ~ s(slaa) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = gaussian(link = "identity"))
+
+gc()
+# gam_2018 = gam(chl ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing), 
+#                method = "REML",
+#                data = df, 
+#                family = gaussian(link = "identity"))
+# 
+# gam_2018 = gam(chl ~ s(doy, by = regions, k=4) + s(doy), #+ s(easting, northing), 
+#                # method = "REML",
+#                data = df, 
+#                family = gaussian(link = "identity"))
+```
+
+Initial plot
+```{r}
+b = plot(gam_chla, all = TRUE)
+s = plot(gam_ssta, all = TRUE)
+```
+
+Visualizing the gam
+```{r, message = FALSE, fig.show = "hold",  fig.align = "center", fig.height = 4, fig.width = 12, fig.height = 5,  warning = FALSE}
+title = c("a)", "b)", "Time")
+
+x1 = as.data.frame(cbind(b[[1]]$x, b[[1]]$fit, b[[1]]$se))
+y1 = as.data.frame(cbind(b[[2]]$x, b[[2]]$fit, b[[2]]$se))
+z1 = as.data.frame(cbind(b[[3]]$x, b[[3]]$fit, b[[3]]$se))
+
+# x1 = subset(x1, V1 > -0.2)
+# x1 = subset(x1, V1 < 0.2)
+
+x2 = as.data.frame(cbind(s[[1]]$x, s[[1]]$fit, s[[1]]$se))
+y2 = as.data.frame(cbind(s[[2]]$x, s[[2]]$fit, s[[2]]$se))
+z2 = as.data.frame(cbind(s[[3]]$x, s[[3]]$fit, s[[3]]$se))
+
+```
+
+```{r, fig.asp = 0.9}
+shadedline(x    = x1$V1, 
+           ylim = c(-0.017, 0.017),
+           xlim = c(-0.12, 0.11),
+           y0 = x1$V2,
+           y1 = x1$V2 + x1$V3*10, 
+           y2 = x1$V2 - x1$V3*10,
+           title = "",
+           line = -1.5,
+           adj  = 0.02,
+           main = paste(title[1]),
+           cex.main = 1.25,
+           ylab = "SSTA Effect [C]",
+           col  = "grey69",
+           xlab = "SLA",
+           xaxis = FALSE,
+           #labels = format(as.Date(x$V1), "%Y-%m-%d"),
+           mar = c(5, 5, 1, 1)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+
+
+shadedline(x    = x2$V1, 
+           ylim = c(-0.28, 0.12),
+           xlim = c(-0.12, 0.11),
+           y0 = x2$V2,
+           y1 = x2$V2 + x2$V3*10, 
+           y2 = x2$V2 - x2$V3*10,
+           title = "",
+           line = -1.5,
+           adj  = 0.02,
+           main = paste(title[2]),
+           cex.main = 1.25,
+           ylab = "SSTA Effect [C]",
+           col  = "grey69",
+           xlab = "SLA",
+           xaxis = FALSE,
+           #labels = format(as.Date(x$V1), "%Y-%m-%d"),
+           mar = c(5, 5, 1, 1)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+```
+
+
+```{r}
+layout.matrix = matrix(c(1, 
+                         2), 
+                        nrow = 2,
+                        ncol = 2,
+                        byrow = TRUE)
+nf = graphics::layout(layout.matrix, 
+                       heights = c(2, 2))
+
+
+shadedline(x    = x1$V1, 
+           ylim = c(-0.015, 0.015),
+           xlim = c(-0.1, 0.1),
+           y0 = x1$V2,
+           y1 = x1$V2 + x1$V3*10, 
+           y2 = x1$V2 - x1$V3*10,
+           title = "",
+           line = -1.5,
+           adj  = 0.02,
+           main = paste(title[1]),
+           cex.main = 1.25,
+           ylab = "SSTA Effect [C]",
+           col  = "grey69",
+           xlab = "SLA",
+           xaxis = FALSE,
+           #labels = format(as.Date(x$V1), "%Y-%m-%d"),
+           mar = c(5, 5, 1, 1)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+
+shadedline(x = y1$V1, 
+           #ylim = c(-0.0025, 0.0015),
+           #xlim = c(0, 0.15),
+           xaxis = FALSE,
+           y0 = y1$V2,
+           y1 = y1$V2 + y1$V3*10, 
+           y2 = y1$V2 - y1$V3*10,
+           title = "",
+           line = -1.5,
+           adj = 0.02,
+           main = paste(title[2]),
+           cex.main = 1.25,
+           ylab = "",
+           col = "grey69",
+           xlab = "FSLE",
+           #labels = format(as.Date(y$V1), "%Y-%m-%d"),
+           mar = c(5, 3, 1, 3)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+
+shadedline(x = z1$V1, 
+           xaxis = FALSE,
+           y0 = z1$V2,
+           y1 = z1$V2 + z1$V3 * 10, 
+           y2 = z1$V2 - z1$V3 * 10,
+           title = "",
+           line = -1.5,
+           adj = 0.02,
+           main = paste(title[3]),
+           cex.main = 1.25,
+           ylab = "CHL resp",
+           col = "grey69",
+           xlab = "DOY",
+           mar = c(5, 3, 1, 3)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+```
+
+correlate across entire bloom
+```{r}
+gc()
+
+w = corLocal(temp[[40]], phyto[[40]], ngb = 11)
+
+plot(temp[[40]])
+plot(phyto[[40]])
+plot(w, col = cmocean("balance")(50))
+```
+
+```{r}
+# this is basicly a stand in vector to be replaced. 
+# could make an empty NA raster of the same dimensions
+cor.raster <- y[[1]]
+# I may have tos cale it from 0-1 depending if that is done already in spearman 
+for(i in 1:ncell(y)) {
+  cor.raster[i] = cor(as.vector(y[i]), as.vector(x[i]), method = 'spearman')
+}
+
+# another way. Would need to be looped
+corr = raster.modifed.ttest(G1, G2)    
+plot(raster(corr), main="spatially adjusted raster correlation")
+```
+
+
+Now for some hovmoller plots
+```{r, fig.width=10}
+# hovmoller(chla_2018, dirXY = y, col.regions=cmocean("rain")(250))
+# library(latticeExtra)
+# hovmoller(chla, 
+#           #panel=panel.2dsmoother, 
+#           #n=1000,
+#           labels=FALSE, 
+#           col.regions=cmocean("rain")(150),
+#           add.contour=FALSE,
+#           xlab='Latitude')
+```
+
+Hovmoller plot of temperature
+```{r, fig.width=10}
+# hovmoller(ssta, dirXY = y, col = "tempo", col.regions=cmocean("thermal")(250))
+# gc()
+```
+
+```{r}
+# library(speedglm)
+# library(ggeffects)
+# 
+# phyto = x[[20]]
+# temp  = y[[20]]
+# extent(phyto) = extent(temp)
+# temp = stack(phyto, temp)
+# 
+# jnk=layerStats(temp, 'pearson', na.rm=T)
+# cor_mat = jnk$`pearson correlation coefficient`
+# 
+# plot(cor_mat)
+# 
+# model = speedglm(ssta ~ slaa, 
+#                 data = df, 
+#                 family=gaussian(link = "identity"))
+# 
+# model_slaa = speedglm(ssta ~ ssta, 
+#                 data = df, 
+#                 family=gaussian(link = "identity"))
+# 
+# plot(ggeffect(model), add.data= FALSE)
+# 
+# for (i in 1:length(figs)) print(figs[[i]])
+```
+
+Cross correllation between tow layers
+```{r}
+library(sp)
+library(spdep)
+   
+data(meuse)
+phyto = y
+temp = x
+
+m = as.data.frame(phyto[[1]], xy = TRUE); 
+n = as.data.frame(temp[[1]], xy = TRUE); 
+coordinates(m)=~x+y
+coordinates(n)=~x+y
+
+I <- crossCorrelation(n$layer.1, m$layer.5.1.2.2, coords = coordinates(m), k=99) 
+
+n$lisa <- I$SCI[,"lsci.xy"]
+
+
+plot(phyto[[1]])
+plot(temp[[1]])
+spplot(n, "lisa")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

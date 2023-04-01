@@ -1,0 +1,544 @@
+---
+title: "Untitled"
+author: "Jamie Ash"
+date: "2022-10-28"
+output: pdf_document
+---
+
+So this is totally fucked because FSLE and SLA don't have crs given with their 
+nc files from AVISO. Killing me. I also can't find it in their metadata on their 
+webpage. I can get the same SLA from CMEMS and it has a crs but not FSLE. 
+
+```{r setup, include=FALSE, message = FALSE}
+source("functions.R")
+source("libraries.R")
+source("blooms.R")
+rasterOptions(maxmemory = 120e+10, memfrac = 0.9)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+setting variables
+```{r}
+#blooms = read.csv("../data/outfiles/full_sum.csv")
+# subseting just 2018 for case study
+idx = year(blooms$sdate) == 2018
+sdate = as.Date(blooms$sdate[idx]) - 22
+edate = as.Date(blooms$edate[idx]) + 22
+# lons  = c(-158, -130)
+# lats  = c(23, 34)
+lons = c(-171, -129)
+lats = c( 17,   36)
+e = extent(-165, -130, 20, 33)
+```
+
+functions
+```{r}
+# input is a boolian raster layer of 0/1 
+# output is a data frame with only high values included
+# Downsize reduces the size of the data set
+# I may like to simultaneously index the chl signal as well
+
+# ------------------------------------------------------------------------------
+# input is a raster output is a boolian raster of bloom/not bloom
+bool = function(x){
+  u <- calc(x, fun = median, na.rm = TRUE)
+  o <- calc(x, fun = mad, na.rm = TRUE)
+  boo <- x > (u + o)
+  extent(boo) <- extent(x)
+  boo <- setZ(boo, z = getZ(x), name = "time")
+  boo
+}
+
+# ---------------------------------------------------------------------------
+tableit <- function(x) {
+  vectorize  <- function(x) {
+    sdate <- getZ(x)
+    x     <- rasterToPoints(x)
+    x     <- data.frame(x)
+    colnames(x) <- c("lat", "lon", as.character(sdate))
+    x     <- reshape2::melt(x, id.vars = c("lat", "lon"))
+    colnames(x) <- c("lats", "lons", "time", "val")
+    x
+  }
+  x     = lapply(x, FUN = vectorize)
+  vals  = lapply(x, FUN = subset, select = "val")
+  quord = lapply(x, FUN = subset, select = c("lons", "lats", "time"))
+  xyz   = data.frame(quord[1], vals)
+  
+  xyz$time = as.character(xyz$time)
+  xyz$time = as.Date(xyz$time)
+  xyz
+  
+  # s = dim(x)
+  # grid = meshgrid(lon, lat)
+  # lat  = raster(grid$X)
+  # lat  = raster(grid$Y)
+  # lat  = rep(lat, s[3])
+  # lon  = rep(lon, s[3])
+  # lat  = values(raster(lat))
+  # lon  = values(raster(lat))
+}
+
+# ------------------------------------------------------------------------------
+jamie_theme <- function(x,
+                        y, 
+                        mar = c(1,1,1,1),
+                        #asp = 1,
+                        ylim = range(y),
+                        xlim = range(x),
+                        main = "",
+                        dt = TRUE,
+                        ylab = "",
+                        xlab = "",
+                        yaxes = FALSE,
+                        xaxes = FALSE,
+                        line = 0.75,
+                        adj = 0.1
+                        ){
+  if(is.numeric(x)) x <- round(x, 1)
+  if(is.numeric(y)) y <- round(y, 1)
+  par(mar = mar)
+  plot(0,
+       ylim = ylim,
+       xlim = xlim,
+       main = "",
+       xlab = "",
+       ylab = "",
+       axes = FALSE,
+       )
+  if(xaxes){
+    axis(side = 1,
+         las = 1, 
+         lwd = 2, 
+         mgp = c(2, 1, 0), 
+         cex.axis = 1,
+         col = colvect("grey22", alpha = 0.9))
+    }
+  if(yaxes){
+    axis(side = 2,
+         las  = 2, 
+         lwd  = 2, 
+         mgp  = c(1, 0.75, 0), 
+         cex.axis = 1,
+         col = colvect("grey22", alpha = 0.9))
+    }
+  grid(nx = NULL, # X-axis divided in two sections
+       ny = NULL, # Y-axis divided in three sections
+       lty = 2, 
+       col = colvect(c("gray69"), alpha = 0.5), lwd = 1)
+  box(which = "plot", 
+      lty = "solid", 
+      lwd = 3, 
+      col = colvect("grey22", alpha = 0.9))
+  title(main = main,
+        cex.lab = 2,
+        line= line,
+        adj = adj)
+  title(ylab = ylab, cex.lab = 1.5, line = 2.5)
+  title(xlab = xlab, cex.lab = 1.5, line = 2.5)
+}
+
+```
+
+Downlaoding and saving CHL data globcolor
+```{r, eval = FALSE}
+# # I'm uploading the large data set for the anomaly calculation
+# chl = opendap(var = "CHL",
+#               url = "https://jash:5.Pellegrino@my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D?",
+#               sdate = sdate,
+#               edate = edate,
+#               lons = lons,
+#               lats = lats
+#               )
+# savenc(chl,
+#        sdir   = "../data/chl",
+#        ncname = "chl_20180624_20181118",
+#        dlname = "chl",
+#        uni    = "mg_m3")
+```
+
+load data
+```{r}
+chl = load_nc(path = "..\\data\\chl\\",
+              patt = "chl_20180624_20181118.nc",
+              origin = "1970-01-01",
+              vars = c("lats", "lons", "value","time"))
+# I saved chl incorrectly
+c_e = extent(chl)
+extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
+rm(c_e)
+
+fsle = load_nc(path = "C:\\Users\\james\\Desktop\\jamieslife\\data\\infiles\\case_study\\fsle\\",
+               patt = "fsle_po_2018.nc")
+extent(fsle) = extent(fsle) - c(360, 360, 0 ,0)
+gc()
+
+sla = load_nc(path = "C:\\Users\\james\\Desktop\\jamieslife\\data\\infiles\\case_study\\sla\\",
+              patt = "2010_2021_sla.nc",
+              vars = c("latitude", "longitude", "sla", "time"))
+gc()
+```
+
+fix oreantation
+```{r}
+fsle = oreant(fsle, flip = "y", t1 = TRUE)
+gc()
+sla  = oreant(sla, flip = "y", t1 = TRUE)
+gc()
+```
+
+Crop all to the same extent
+```{r crop}
+e = extent(-158, -130, 22, 33)
+fsle = raster::crop(fsle, e)
+chl  = raster::crop(chl, e)
+sla  = raster::crop(sla,  e)
+gc()
+```
+
+Calculate a sla anomaly
+```{r}
+slaa = anomalize(ras = sla, detrend = FALSE)
+rm(sla)
+gc()
+```
+
+Make FSLE and CHL them the same time domain. Make FSLE same temporal resolution as CHL
+```{r}
+match = function(x, y){
+  ty = getZ(y)
+  ty = as.numeric(ty)
+  tx = getZ(x)
+  tx = as.numeric(tx)
+  
+  idx  = which(is.element(tx, ty))
+  tx   = subset(tx, is.element(tx, ty))
+  x = raster::subset(x, idx)
+  x = setZ(x, z = as.Date(tx), name = "time")
+  x
+}
+
+fsle = match(x = fsle, y = chl)
+slaa = match(x = slaa, y = chl)
+gc()
+```
+
+Cut to timespan of bloom from table 1
+Not completly nessisary now will see for latter
+```{r, eval = FALSE}
+edate = edate - 11
+chl  = timesnip(chl,   sdate, edate)
+fsle = timesnip(fsle,  sdate, edate)
+slaa = timesnip(slaa,  sdate, edate)
+```
+
+Looking at oreantation and projections there's a huge projection issue
+```{r}
+fmap  = calc(fsle, fun = mean)
+smap  = calc(slaa,  fun = mean)
+wdmap = getMap(resolution = "high")
+
+e = extent(fmap)
+plot(fmap)
+plot(wdmap, 
+       xlim = e[1:2], 
+       ylim = e[3:4], 
+       asp = 1, 
+       bg = "white", 
+       border = "black", 
+       col = "ivory", 
+       #wrap = c(-180, 180), 
+       add = TRUE)
+
+e = extent(smap)
+plot(smap)
+plot(wdmap, 
+       xlim = e[1:2], 
+       ylim = e[3:4], 
+       asp = 1, 
+       bg = "white", 
+       border = "black", 
+       col = "ivory", 
+       #wrap = c(-180, 180), 
+       add = TRUE)
+
+e = extent(chl[[10]])
+plot(chl[[10]])
+plot(wdmap, 
+       xlim = e[1:2], 
+       ylim = e[3:4], 
+       asp = 1, 
+       bg = "white", 
+       border = "black", 
+       col = "ivory", 
+       #wrap = c(-180, 180), 
+       add = TRUE)
+```
+
+Resample to the size of FSLE
+```{r resample}
+resample = function(ras, to, method = "bilinear"){
+  raster::crs(ras) = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
+  t = getZ(to)
+  e = extent(to)
+  extent(ras) = extent(e)
+  ras = raster::resample(ras,  to, method = method)
+  extent(ras) = e
+  ras = setZ(ras, z = as.Date(t), name = "time") 
+  ras
+  }
+
+fsle = resample(fsle, to = chl, method = "ngb")
+gc()
+slaa = resample(slaa, to = chl, method = "ngb")
+gc()
+chl  = resample(chl,  to = chl, method = "ngb")
+```
+
+Remove coastal influence: SOmething is wrong here
+```{r}
+chl = bufcoast(chl, 
+               region = "Hawaiian Islands", 
+               path = "../data/USMaritimeLimitsAndBoundariesSHP")
+fsle = bufcoast(fsle, 
+               region = "Hawaiian Islands", 
+               path = "../data/USMaritimeLimitsAndBoundariesSHP")
+slaa = bufcoast(slaa, 
+               region = "Hawaiian Islands", 
+               path = "../data/USMaritimeLimitsAndBoundariesSHP")
+gc()
+```
+
+Create table
+```{r}
+# this is much simpler code but may take alot of memory
+vectorize = function (ras) {
+  df = cbind(coordinates(ras), values(ras))
+  df = data.frame(df)
+  time = getZ(ras)
+  time = rep(time, times = nrow(df))
+  df$time = time
+  colnames(df) = c("lon", "lat", "value", "time")
+  df
+  }
+
+ras2tbl = function(ras, name = "value"){
+  ras_l = list()
+  for(i in 1:dim(ras)[3]) ras_l[[i]] = ras[[i]]
+  
+  ras_df = lapply(ras_l, vectorize)
+  
+  ras_df = do.call(rbind, ras_df)
+  ras_df
+  }
+
+slaa_df = ras2tbl(slaa, name = "value")
+gc()
+fsle_df = ras2tbl(fsle, name = "value")
+gc()
+chl_df  = ras2tbl(chl,  name = "value")
+
+
+# create one data frame
+xyz = data.frame(time = slaa_df$time, 
+                 lat  = slaa_df$lat, 
+                 lon  = slaa_df$lon, 
+                 fsle = fsle_df$value,
+                 slaa = slaa_df$value,
+                 chl  = chl_df$value)
+
+rm(slaa_df, fsle_df, chl_df)
+gc()
+```
+
+K-cluster by day produce table
+```{r, message = FALSE, eval = FALSE}
+# changing sla to slaa funciton should be written better
+kcluster = function(x, y){
+  y = scale01(y)
+  x = scale01(x)
+  
+  us = median(x, na.rm = TRUE)
+  uf = median(y, na.rm = TRUE)
+  ms = mad(x, na.rm = TRUE)
+  mf = mad(y, na.rm = TRUE)
+  
+  cents = rbind(c(us,      uf),
+                c(us - ms, uf),
+                c(us + ms, uf),
+                c(us, uf + mf))
+  set.seed(225)
+  ktbl = kmeans(data.frame(x, y), # think it needs to be a data frame
+                centers   = cents,
+                iter.max  = 10,
+                nstart    = 20, 
+                algorithm = "Lloyd")
+  
+  k = data.frame(ktbl$cluster)[, 1]
+  as.numeric(k)
+}
+
+# k-means does not like NA values
+xyz = subset(xyz, !is.na(fsle))
+xyz = subset(xyz, !is.na(slaa))
+
+# apply to the entire dataset
+k = kcluster(x = xyz$slaa, y = xyz$fsle)
+k = as.numeric(k)
+xyz$k = k
+gc()
+```
+
+Preparing a data frame for the GAM
+```{r}
+# remove effects of clouds
+df = xyz
+
+# Cleaning up the data set
+df  = xyz[!is.na(df$chl),]
+df$time = as.Date(df$time)
+df$regions = as.factor(df$k)
+gc()
+# Converting lat lon to distance
+xy   = cbind(df$lat, df$lon)
+utms = rgdal::project(xy, "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0") # need to change zones
+df$northing = utms[, 1]/1000
+df$easting  = utms[, 2]/1000
+df$doy = as.numeric(format(df$time, '%j'))
+df = df[, c("chl", "slaa", "fsle", "regions", "doy", "easting", "northing")]
+df$fsle = df$fsle * -1
+
+# cutting the end date back
+idx = df$doy < 309
+df = df[idx, ]
+
+gc()
+```
+
+perform GAM 
+```{r}
+library(rgdal)
+library(mgcViz)
+# gam_2018 = gam(chl ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing), 
+#                method = "REML",
+#                data = df, 
+#                family = gaussian(link = "identity"))
+
+gam_2018 = gam(chl ~ s(slaa) + s(fsle) + s(doy) + s(easting, northing), 
+               #method = "REML",
+               data = df, 
+               family = Gamma(link = "identity"))
+
+# gam_2018 = gam(chl ~ s(slaa) + s(fsle) + s(doy), # + s(easting, northing), 
+#                # method = "REML",
+#                data = df, 
+#                family = gaussian(link = "identity"))
+# 
+# 
+# gam_2018 = gam(chl ~ s(doy, by = regions, k=4) + s(doy), #+ s(easting, northing), 
+#                # method = "REML",
+#                data = df, 
+#                family = gaussian(link = "identity"))
+
+summary(gam_2018)
+```
+
+Initial plot
+```{r}
+b = plot(gam_2018, all = TRUE)
+```
+
+Visualizing the gam
+```{r, message = FALSE, fig.show = "hold",  fig.align = "center", fig.height = 4, fig.width = 12, fig.height = 5,  warning = FALSE}
+start = as.Date("2018-06-15")
+end   = as.Date("2018-08-25")
+title = c("a)", "b)", "Time")
+
+x = as.data.frame(cbind(b[[1]]$x, b[[1]]$fit, b[[1]]$se))
+y = as.data.frame(cbind(b[[2]]$x, b[[2]]$fit, b[[2]]$se))
+z = as.data.frame(cbind(b[[3]]$x, b[[3]]$fit, b[[3]]$se))
+
+layout.matrix = matrix(c(1, 
+                         2), 
+                        nrow = 2,
+                        ncol = 2,
+                        byrow = TRUE)
+nf = graphics::layout(layout.matrix, 
+                       heights = c(2, 2))
+
+shadedline(x    = x$V1, 
+           ylim = c(-0.007, 0.01),
+           xlim = c(-0.25, 0.2),
+           y0 = x$V2,
+           y1 = x$V2 + x$V3, 
+           y2 = x$V2 - x$V3,
+           title = "",
+           line = -1.5,
+           adj  = 0.02,
+           main = paste(title[1]),
+           cex.main = 1.25,
+           ylab = "CHL Effect [mg/m^3]",
+           col  = "grey69",
+           xlab = "SLA",
+           xaxis = FALSE,
+           #labels = format(as.Date(x$V1), "%Y-%m-%d"),
+           mar = c(5, 5, 1, 1)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+
+shadedline(x = y$V1, 
+           ylim = c(min(y$V2 - y$V3), max(y$V2 + y$V3)),
+           # xlim = c(0, ),
+           xaxis = FALSE,
+           y0 = y$V2,
+           y1 = y$V2 + y$V3, 
+           y2 = y$V2 - y$V3,
+           title = "",
+           line = -1.5,
+           adj = 0.02,
+           main = paste(title[2]),
+           cex.main = 1.25,
+           ylab = "",
+           col = "grey69",
+           xlab = "FSLE",
+           #labels = format(as.Date(y$V1), "%Y-%m-%d"),
+           mar = c(5, 3, 1, 3)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+
+shadedline(x = z$V1, 
+           xaxis = FALSE,
+           y0 = z$V2,
+           y1 = z$V2 + z$V3, 
+           y2 = z$V2 - z$V3,
+           title = "",
+           line = -1.5,
+           adj = 0.02,
+           main = paste(title[3]),
+           cex.main = 1.25,
+           ylab = "CHL resp",
+           col = "grey69",
+           xlab = "DOY",
+           mar = c(5, 3, 1, 3)
+           )
+axis(side = 1, 
+     las = 1, 
+     lwd = 2, 
+     mgp = c(2, 1, 0), 
+     cex.axis = 1.15)
+```
+
+
+
+
+
+
+

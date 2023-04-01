@@ -1,0 +1,911 @@
+---
+title: "Case Study"
+author: "Jamie Ash"
+date: "05/31/2022"
+output: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: paper #cerulean #cosmo #journal #readable
+    toc: false
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    fig_caption: yes
+    code_folding: hide
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+.main-container {
+  max-width: 1000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+.vscroll-plot {
+    width: 800px;
+    height: 400px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+}
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE, message = FALSE}
+source("functions.R")
+source("libraries.R")
+source("blooms.R")
+rasterOptions(maxmemory = 120e+10, memfrac = 0.9)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Custom functions 
+```{r, message = FALSE}
+# input is a boolian raster layer of 0/1 
+# output is a data frame with only high values included
+# Downlsize reduces the size of the data set
+# I may like to simultaniously index the chl signal as well
+chl_fronts = function(blooms,
+                      signal,
+                      downsize = 10){
+  ras  = raster::flip(blooms, direction = "x")
+
+  idx  = which(values(blooms) == TRUE) # == TRUE
+  
+  e    = extent(blooms)
+  s    = dim(blooms)
+  lons = seq(from = e[1], to = e[2], length = s[1]) 
+  lats = seq(from = e[3], to = e[4], length = s[2]) 
+  grid = pracma::meshgrid(lons, lats)
+  # using the blooms index to subset the signal values
+  fronts = data.frame(lons = grid$X[idx], lats = grid$Y[idx], value = signal[idx])
+  idx = seq(1, nrow(fronts), downsize)
+  fronts = fronts[idx, ]
+  fronts
+}
+
+# use the apply function to apply the calc mean function for every 8 layers
+
+avestack = function(ras, by = 8, fun){
+  t = getZ(ras)
+  s      = dim(ras)
+  idx_8d = rep(1:ceiling(s[3]/8), 8)
+  idx_8d = sort(idx_8d)
+  rem    = abs(s[3] - length(idx_8d))
+  idx_8d = idx_8d[1:(length(idx_8d)-rem)]
+  idx_og = 1:s[3]
+  t_idx  = unique(idx_8d)
+  idx    = data.frame(idx_8d = idx_8d, idx_og = idx_og)
+  idx$idx_8d = as.factor(idx$idx_8d)
+  idx = split(idx, idx_8d)
+  
+  # subset and average every eight days
+  tempset = function(x, ras) ras[[x$idx_og]]
+  days = lapply(idx, FUN = tempset, ras = ras)
+  days = lapply(days, FUN = calc, fun = fun, na.rm = TRUE)
+  days = brick(days)
+  days = setZ(days, z = t[t_idx], name = "time")
+  days
+  }
+
+# Writing this as a function to take a date range, a chl anomaly signal, 
+# and output an area time-series
+
+# Input is 3D chla raster output is time series vector of bloom area
+bloom_area = function(b){
+  t    = getZ(b)
+  rr   = reclassify(b, cbind(0,NA))
+  a    = raster::area(rr)
+  temp = raster::mask(a, rr)
+  
+  km2  = cellStats(temp, stat = "sum", na.rm = TRUE)
+  data.frame(area = as.numeric(km2), time= t)
+}
+
+# input x is a raster of raw chl
+# inpur x is a raster of 0/1 bloom non-bloom
+bloom_con = function(x, b, stat = "mean"){
+  t = getZ(x)
+  # make bloom raster a mask
+  rr   = reclassify(b, cbind(0,NA))
+  # mask bloom raster with bloom raster
+  temp = raster::mask(x, rr)
+  mag  = cellStats(temp, stat = stat, na.rm = TRUE)
+  data.frame(con = as.numeric(mag), time= t)
+}  
+
+basic_theme <- function(x,
+                        y, 
+                        mar = c(1,1,1,1),
+                        #asp = 1,
+                        ylim = range(y),
+                        xlim = range(x),
+                        main = "",
+                        dt = TRUE,
+                        ylab = "",
+                        xlab = ""
+){
+  if(is.numeric(x)) x <- round(x, 1)
+  if(is.numeric(y)) y <- round(y, 1)
+  par(mar = mar)
+  plot(0,
+       ylim = ylim,
+       xlim = xlim,
+       main = "",
+       xlab = "",
+       ylab = "",
+       axes = FALSE,
+       )
+  grid(nx = NULL, # X-axis divided in two sections
+       ny = NULL, # Y-axis divided in three sections
+       lty = 2, 
+       col = colvect(c("gray69"), alpha = 0.5), lwd = 1)
+  box(which = "plot", 
+      lty = "solid", 
+      lwd = 3, 
+      col = colvect("grey22", alpha = 0.9))
+  title(main = main,
+        cex.lab = 2,
+        line= 0.75,
+        adj = 0)
+  title(ylab = ylab, cex.lab = 1.5, line = 2.5)
+  title(xlab = xlab, cex.lab = 1.5, line = 2.5)
+}
+
+
+# 
+# area_ts = function(x = chla, sdate = NULL, edate = NULL, stat = "sum") {
+#   
+#   # Find a bloom not bloom matrix
+#   t = getZ(x)
+#   u = calc(x, fun = median, na.rm = TRUE)
+#   o = calc(x, fun = mad, na.rm = TRUE)
+#   blooms = x > u + o
+#   blooms = setZ(blooms, z = t, name = "time")
+#   
+#   # subset the bloom by time
+#   blooms  <- crop3d(x     = blooms, 
+#                     sdate = sdate,
+#                     edate = edate)
+#   
+#   t <- getZ(blooms)
+#   
+#   # Area time series for duration 
+#   rr <- reclassify(blooms, cbind(0,NA))
+#   # find area of each cell + mask cells that matter
+#   a  <- raster::area(rr)
+#   aa <- raster::mask(a, rr)
+#   # take the sum of all the cells area for bloom magnitude
+#   area <- as.numeric(cellStats(aa, stat = "sum", na.rm = TRUE)) # m2 to km2?
+#   
+#   # I'm taking the sum of true/flase values. I want to mask the chla by the 
+#   # true/false
+#   mag  <- crop3d(x     = chla, 
+#                  sdate = sdate,
+#                  edate = edate)
+#   
+#   #mag <- raster::mask(mag, rr)
+#   # I'm going to try masking this way so simple. 
+#   # multiplying by boolian matrix of blooms
+#   mag <- mag * blooms
+#   val <- cellStats(mag, stat, na.rm = TRUE)
+#   
+#   data.frame(area = area, val = val, time = t)
+#   # CHL timeseries. layer wise mean the seasonally filtered chl
+# }
+
+# polymask <- function(ras, 
+#                      x = c(-170, -152, -157, -162, -170, -170), 
+#                      y = c(  20,   20,   22,  24.5, 28, 20)){
+#   Sr1 = Polygon(cbind(x,
+#                       y))
+#   Spp = SpatialPolygons(list(Polygons(list(Sr1), "s1")))
+#   SpP_ras = raster::rasterize(Spp, ras, getCover=TRUE)
+#   SpP_ras[SpP_ras == 1] = NA
+#   ras <- raster::mask(ras, SpP_ras)
+#   ras
+# }
+# input is a raster output is a boolian raster of bloom/not bloom
+
+bool = function(x){
+  u <- calc(x, fun = median, na.rm = TRUE)
+  o <- calc(x, fun = mad, na.rm = TRUE)
+  boo <- x > (u + o)
+  extent(boo) <- extent(x)
+  boo <- setZ(boo, z = getZ(x), name = "time")
+  boo
+}
+
+vectorize  <- function(x) {
+  sdate <- getZ(x)
+  # x = raster::flip(x, direction = "x")
+  # x = raster::flip(x, direction = "y")
+  # 
+  e = extent(x)
+  x = t(x)
+  extent(x) = e
+  # 
+  x     <- rasterToPoints(x)
+  x     <- data.frame(x)
+  colnames(x) <- c("lon", "lat", as.character(sdate))
+  x     <- reshape2::melt(x, id.vars = c("lat", "lon"))
+  colnames(x) <- c("lats", "lons", "time", "val")
+  x
+}
+
+tsect <- function(x, y, z, xreach = 1, yreach = 1, xlen = 120, ylen = 40){
+  #make a max min vector of sla and fsle
+  coord = c(max(x, na.rm = TRUE), min(x, na.rm = TRUE), 
+            max(y, na.rm = TRUE), min(y, na.rm = TRUE))
+  
+  # use maxmin vector to create fake x, y vectors (downsized) as meshgrid input
+  y_vec <- seq(from = coord[4], to = coord[3], length.out = ylen) 
+  # may need to invert to be same length 
+  x_vec <- seq(from = coord[2], to = coord[1], length.out = xlen)
+  xy_grid <- meshgrid(x_vec, y_vec)
+  
+  #inisilize a matrix of dim fs_grid[1] filled with NA values
+  dims <- dim(xy_grid[[1]])
+  z_grid <- matrix(data = NA, 
+                   nrow = dims[1], 
+                   ncol = dims[2], 
+                   dimnames = NULL)
+  
+  for(iy in 1:dims[1]) {
+    for(ix in 1:dims[2]){
+      # where in the df is the difference greater than the units
+      box_x <- which(abs(x - xy_grid[[1]][iy, ix]) <= xreach)
+      box_y <- which(abs(y - xy_grid[[2]][iy, ix]) <= yreach)
+      # I think the grids are dif sizes and should be subet differently
+      #index vector of both cox_sla and box_fsle as one
+      #box <- sort(match(box_y, box_x))
+      
+      # I think this is the correct way to do this
+      box <- box_x[box_x %in% box_y]
+      
+      z_grid[iy, ix] <- mean(z[box], na.rm = TRUE)
+    }
+  }
+  
+  list(z_grid, y_vec, x_vec)
+}
+
+jamie_theme <- function(x,
+                        y, 
+                        line = 0.75,
+                        adj = 0,
+                        #asp = 1,
+                        ylim = range(y),
+                        xlim = range(x),
+                        main = "",
+                        #labels = seq(from = min(x)+5, to   = max(x)-5, by   = 15),
+                        labels = round(seq(range(x)[1]+1, range(x)[2]-1, length = 6), 1),
+                        at =  round(seq(range(x)[1]+1, range(x)[2]-1, length = 6), 1),
+                        dt = TRUE,
+                        yaxes = TRUE,
+                        xaxes = TRUE,
+                        ylab = "",
+                        xlab = "",
+                        cex.main = 1.25
+){
+  
+  if(dt == TRUE) labels <- format(as.Date(labels), "%b-%d")
+  if(is.numeric(x)) x <- round(x, 1)
+  if(is.numeric(y)) y <- round(y, 1)
+  
+  plot(0,
+       ylim = ylim,
+       xlim = xlim,
+       main = "",
+       xlab = "",
+       ylab = "",
+       axes = FALSE,
+       #asp = asp,
+       )
+  grid(nx = NULL, # X-axis divided in two sections
+       ny = NULL, # Y-axis divided in three sections
+       lty = 2, 
+       col = colvect(c("gray69"), alpha = 0.5), lwd = 1)
+  box(which = "plot", 
+      lty = "solid", 
+      lwd = 3, 
+      col = colvect("grey22", alpha = 0.9))
+  if(xaxes){axis(side = 1,
+       at = at,
+       labels = labels,
+       las = 1, 
+       lwd = 2, 
+       mgp = c(2, 1, 0), 
+       cex.axis = 1.15,
+       col = colvect("grey22", alpha = 0.9))}
+  if(yaxes){axis(side = 2,
+       las  = 2, 
+       lwd  = 2, 
+       mgp  = c(1, 0.75, 0), 
+       cex.axis = 1.15,
+       col = colvect("grey22", alpha = 0.9))}
+  title(main = main,
+        cex.lab = cex.main,
+        line = line,
+        adj = adj)
+  title(ylab = ylab, cex.lab = 1.25, line = 2.5)
+  title(xlab = xlab, cex.lab = 1.25, line = 2.25)
+}
+```
+
+# Data processing
+
+# loading data via opendap had issues with over engineered function
+```{r, warning = FALSE, message = FALSE}
+
+sdate = as.Date("2018-01-01")
+edate = as.Date("2019-01-01") 
+
+# lons  = c(-158, -130)
+# lats  = c(23, 34)
+lons = c(-165, -130)
+lats = c( 18,   35)
+e = extent(lons, lats)
+
+# cache_list()
+cache_delete_all(force = FALSE)
+
+# Set variables
+lat_varid = "lat"
+lon_varid = "lon"
+# sdate = as.Date("1997-06-01")
+# edate = as.Date("2021-11-01")
+var = "CHL"
+url = "https://jash:5.Pellegrino@my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D?"
+
+origin = "1900-01-01"
+
+data = nc_open(url, verbose = FALSE, write = FALSE)
+lat  = ncvar_get(data, varid = lat_varid)
+lon  = ncvar_get(data, varid = lon_varid)
+time = ncvar_get(data, varid = "time")
+time = as.Date(time, origin = origin)
+
+idx_lat  = which(lat > lats[1] & lat < lats[2])
+idx_lon  = which(lon > lons[1] & lon < lons[2])
+idx_time = which(time >= sdate & time <= edate)
+
+idx_ras = paste("CHL",
+                 paste("[", range(idx_time)[1], ":1:", range(idx_time)[2], "]", sep = ""),
+                 paste("[", range(idx_lat)[1],  ":1:", range(idx_lat)[2],  "]", sep = ""),
+                 paste("[", range(idx_lon)[1],  ":1:", range(idx_lon)[2],  "]", sep = ""),
+                 sep = "")
+
+idx_time = paste("time", paste("[", range(idx_time)[1], ":1:",range(idx_time)[2], "]", sep = ""), sep = "")
+idx_lat  = paste(lat_varid, paste("[", range(idx_lat)[1], ":1:",range(idx_lat)[2],  "]", sep = ""), sep = "")
+idx_lon  = paste(lon_varid, paste("[", range(idx_lon)[1], ":1:",range(idx_lon)[2],  "]", sep = ""), sep = "")
+idx = paste(idx_lat, idx_lon, idx_time, idx_ras, sep = ",")
+
+url = paste(url, idx, sep = "")
+
+nc_close(data)
+rm(data)
+
+data = nc_open(url, verbose = FALSE, write = FALSE)
+
+lat  = ncvar_get(data, varid = lat_varid)
+lon  = ncvar_get(data, varid = lon_varid)
+time = ncvar_get(data, varid = "time")
+time = as.Date(time, origin = origin)
+ras  = ncvar_get(data)
+nc_close(data)
+
+s   = dim(ras)
+ras = raster::brick(ras)
+ras = t(ras)
+ras = setZ(ras, z = as.Date(time, origin = org), name = "time")
+extent(ras) = extent(min(lons), max(lons), min(lats), max(lats))
+
+chl = ras
+rm(ras)
+gc()
+```
+
+Loading the data using ERDDAP
+```{r data, message = FALSE, warning = FALSE}
+# Bloom start and stop dates
+# blooms = read.csv("../data/outfiles/full_sum.csv")
+# subseting just 2018 for case study
+# idx = year(blooms$sdate) == 2018
+# sdate = as.Date(blooms$sdate[idx]) - 16
+# edate = as.Date(blooms$edate[idx]) + 15
+# # lons  = c(-158, -130)
+# # lats  = c(23, 34)
+# lons = c(-165, -130)
+# lats = c( 18,   35)
+# 
+# # cache_list()
+# cache_delete_all(force = FALSE)
+# 
+# # should try loading chla data from ERDDAP. Or just anomaly this in one function 
+# # I need to make sure I'm not saving a fuck tone of files
+# # I'm uploading the large data set for the anomaly calculation
+# chl = loadsat(url = "https://coastwatch.noaa.gov//erddap",
+#               id  = "noaacwNPPN20S3ASCIDINEOFDaily",
+#               lat = lats,
+#               lon = lons,
+#               parameter = c("all"),
+#               sdate = as.Date("2018-02-09"),
+#               edate = as.Date("2022-01-01"),
+#               large = TRUE,
+#               by = 10)
+
+# ppp = loadsat(url = "https://coastwatch.pfeg.noaa.gov/erddap",
+#               id  = "erdMH1pp8day",
+#               lat = lats,
+#               lon = lons,
+#               parameter = c("productivity"),
+#               sdate = as.Date("2018-06-01"),
+#               edate = as.Date("2018-11-15"),
+#               large = FALSE,
+#               by = 10)
+
+fields =  c("temp",
+            "temp_qc",
+            "temp_adjusted", 
+            "psal", 
+            "psal_adjusted", 
+            "pres", 
+            "pres_adjusted", 
+            "time",
+            "cycle_number", 
+            "latitude", 
+            "longitude",
+            "platform_number")
+
+float = loadfloat(sdate  = sdate, 
+                  edate = edate, 
+                  lons  = lons, 
+                  lats  = lats,
+                  fields = fields,
+                  id = "ArgoFloats")
+gc()
+```
+
+Correct oreantation
+```{r}
+# chl = oreant(chl, t1 = TRUE)
+```
+
+Remove Region around Hawaii. CZ fornow 
+```{r, eval = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+chl = bufcoast(chl, 
+               region = "Hawaiian Islands", 
+               path = "../data/USMaritimeLimitsAndBoundariesSHP")
+gc()
+```
+
+Calculate CHL anomaly
+```{r, echo = FALSE, message = FALSE, warning = FALSE, cache = FALSE}
+# I receive an warning when detrending for cells of all NA values (hawaii)
+# chl anom. calc. needs at least one full year to work correctly
+chla = anomalize(chl, detrend = FALSE)
+chlb = bool(chla)
+gc()
+```
+
+checking how well the filter did
+```{r}
+c_time = cellStats(chla, stat='mean', na.rm=TRUE)
+plot(1:length(c_time), c_time)
+```
+
+Subset time-span of interest: 2018 summer bloom
+```{r, message = FALSE, warning = FALSE, cache = FALSE}
+# I could also just load using errdap. This is faster tho
+#ppp_2018  = timesnip(ppp,  as.Date(sdate), as.Date(edate)
+idx = year(blooms$sdate) == 2018
+sdate = as.Date(blooms$sdate[idx]) - 16
+edate = as.Date(blooms$edate[idx]) + 15
+
+chl_2018  = timesnip(chl,  as.Date(sdate), as.Date(edate))
+chla_2018 = timesnip(chla, as.Date(sdate), as.Date(edate))
+chlb_2018 = timesnip(chlb, as.Date(sdate), as.Date(edate))
+```
+
+Process PP: resize ppp to chl and interpolate over clouds
+```{r, eval = FALSE}
+# matches x to y in the time domain
+# match = function(x, y){
+#   ty = getZ(y)
+#   ty = as.numeric(ty)
+#   tx = getZ(x)
+#   tx = as.numeric(tx)
+#   
+#   idx  = which(is.element(tx, ty))
+#   tx   = subset(tx, is.element(tx, ty))
+#   x = raster::subset(x, idx)
+#   x = setZ(x, z = as.Date(tx), name = "time")
+#   x
+# }
+# resample = function(ras, to, method = "bilinear"){
+#   raster::crs(ras) = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
+#   t = getZ(to)
+#   e = extent(to)
+#   extent(ras) = extent(e)
+#   ras = raster::resample(ras,  to, method = method)
+#   extent(ras) = e
+#   ras = setZ(ras, z = as.Date(t), name = "time") 
+#   ras
+#   }
+# 
+# time = getZ(ppp_2018)
+# 
+# chlb_8day = match(chlb_2018, ppp_2018)
+# ppp_2018 = crop(ppp_2018, chlb_8day)
+# extent(ppp_2018) = extent(chlb_8day)
+# 
+# ppp_2018 = resample(ppp_2018, to = chlb_8day)
+# 
+# # interpolate bitch
+# ppp_2018 = approxNA(ppp_2018, rule=2)
+# 
+# # remove coastal effects
+# ppp_2018 = bufcoast(ppp_2018, 
+#                     region = "Hawaiian Islands", 
+#                     path = "../data/USMaritimeLimitsAndBoundariesSHP")
+# 
+# ppp_2018 = setZ(ppp_2018, z = time, name = "time")
+# extent(ppp_2018) = extent(chlb_8day)
+# gc()
+```
+
+Calculate patch area
+```{r, message = FALSE}
+# integrated = depth integrated
+tsa = bloom_area(chlb_2018)
+# magnitude might like the raw CHL
+tsc = bloom_con(chl_2018, chlb_2018, stat = "mean")
+
+# Need to have a chlb_2018 that's 8 day time snipped
+# calcuates the average pp might want total
+#tsp = bloom_mag(ppp_2018, chlb_8day)
+
+#tsa = area_ts(chla, sdate = sdate, edate = edate, stat = "mean")
+bloom_2018 = data.frame(area = tsa$area, 
+                        con  = tsc$con, 
+                        time = tsa$time)
+
+# cleaning work space
+rm(tsa, tsc)
+```
+
+Process float data
+```{r, message = FALSE, warning = FALSE}
+# time-series of the mixed layer depth for the 
+# Converting all columns to numeric
+float$time = as.numeric(as.Date(float$time))
+
+#float$float_serial_no = as.factor(float$float_serial_no)
+float$float_serial_no = as.factor(float$platform_number)
+
+float = data.frame(lapply(float, function(x) as.numeric(as.character(x))))
+
+# removing bad float data
+float = subset(float, 
+               psal > 3 
+               & temp > 5 
+               & temp < 45 
+               & pres > 0
+               & pres < 800)
+
+#float$float_serial_no <- as.numeric(float$float_serial_no)
+float$float_serial_no <- as.numeric(float$platform_number)
+float$time            <- as.numeric(float$time)
+
+# Identifying bad floats and removing them
+badf  = subset(float, temp < 10 & pres < 100)
+#badid = is.element(float$float_serial_no, badf$float_serial_no)
+badid = is.element(float$float_serial_no, badf$platform_number)
+badcy = is.element(float$cycle_number, badf$cycle_number)
+float = subset(float, !badid & !badcy)
+rm(badcy, badid, badf)
+
+# Identifying bad floats and removing them
+badf = subset(float, temp > 20 & pres > 300)
+#badid = is.element(float$float_serial_no, badf$float_serial_no)
+badid = is.element(float$float_serial_no, badf$platform_number)
+badcy = is.element(float$cycle_number, badf$cycle_number)
+float = subset(float, !badid & !badcy)
+
+rm(badcy, badid, badf)
+```
+
+Calculate density and mixed layer depth
+```{r, message = FALSE}
+# I changed the region so floats suck
+
+# Density Calculation: function from the oce package and calc. density
+float$rho = swRho(salinity = float$psal,
+                  temperature = float$temp,
+                  pressure = float$pres,
+                  latitude = float$latitude,
+                  eos = getOption("oceEOS", default = "gsw"))
+# I should make sure float factors are not lost to NA values
+
+#float = subset(float, !is.na(float_serial_no))
+float = subset(float, !is.na(platform_number))
+
+# Mixed layer depth per profile
+#id = unique(float[, c("float_serial_no", "cycle_number")])
+id = unique(float[, c("platform_number", "cycle_number")])
+
+mixed = data.frame(matrix(data = NA, 
+                          nrow = nrow(id), 
+                          ncol = ncol(float)+1, 
+                          dimnames = NULL))
+colnames(mixed) = colnames(float)
+
+for(i in 1:nrow(id)){
+  oneprof = subset(float, 
+                   float_serial_no == id$platform_number[i] & 
+                   cycle_number == id$cycle_number[i])
+  if(nrow(oneprof) > 4) mixed[i, ] = mldchu(ctd = oneprof, x = "rho", y = "pres_adjusted", n = 10)
+}
+```
+
+Last minute remove bad data
+```{r, message = FALSE}
+mix = mixed
+mix = subset(mixed, !pres == 8)
+mix = subset(mix, !pres > 100)
+chl_float = subset(float, pres < 40) 
+```
+
+Loess running average
+```{r, message = FALSE}
+# I may want to change tsa to include magnitude. Maybe keep seperate
+t     = as.numeric(bloom_2018$time)
+
+curve = loess(mix$pres_adjusted ~ mix$time) 
+x_mod = seq(min(t), max(t), length.out = length(t))
+mix_mod = predict(curve, newdata =  x_mod, type = "response")
+
+bloom_2018$mld = mix_mod
+```
+
+CHL concentration and units conversion
+```{r, message = FALSE}
+# quik and dirty way of handling clouds. I hope hawiann islands are not in this extent
+s = dim(chl_2018)
+n = s[1] * s[2]
+clouds = sum(is.na(values(chl_2018))) / n
+clouds = unname(clouds)
+bloom_2018$area =  bloom_2018$area * (1+clouds)
+
+# In mg
+bloom_2018$bio = (bloom_2018$mld * bloom_2018$con * bloom_2018$area * 1e+06)
+# mg to kilotons 
+bloom_2018$bio = bloom_2018$bio/(1e+12)
+bloom_2018$area = bloom_2018$area/1e+05 #10e05
+bloom_2018$con = bloom_2018$con*1000 #to ug
+elephants = max(bloom_2018$bio*1000)/ 5.98742 # elephant in t
+```
+
+# Data visualization 
+
+```{r, fig.width=5, fig.height=8, message = FALSE, fig.show = "hold",  warning = FALSE, echo = FALSE}
+png(filename="biomass_20230331.png",
+    width = 3.5,
+    height = 6,
+    units = "in",
+    res = 300,
+    pointsize = 10)
+
+width = 3
+width_px = 3 * 300
+cex = width
+
+layout(matrix(c(1,  
+                2,
+                3), 
+              nrow = 3, 
+              ncol = 1, 
+              byrow = TRUE),
+       widths  = c(1),
+       heights = c(1, 1, 1.15))
+
+# Area
+par(mar = c(0, 5, 2, 3))
+x = as.numeric(bloom_2018$time)
+y = bloom_2018$area
+jamie_theme(x = x, 
+            y = y, 
+            dt  =FALSE,
+            main = "", 
+            xlab = "",
+            #ylim = c(2, 25),
+            #xlim = c(as.Date("2018-07-01"), as.Date("2018-11-05")),
+            ylab = expression(Surface ~ Area ~ (km^2 ~ e05)),
+            line = 0.75,
+            adj = 0,
+            yaxes = TRUE,
+            xaxes = FALSE)
+points(x, y,  pch = 20, cex = 1.25) 
+box(which = "plot", 
+      lty = "solid", 
+      lwd = 1, 
+      col = colvect("grey22", alpha = 0.9))
+
+# CHL Concentration
+par(mar = c(1, 5, 1, 3))
+x = bloom_2018$time
+y = bloom_2018$bio
+jamie_theme(x = x,
+            y = y,
+            #xlim = c(as.Date("2018-07-01"), as.Date("2018-11-05")),
+            #ylim = c(0, 10),
+            dt = FALSE,
+            line = 0.75,
+            adj = 0.0,
+            main = "",
+            xlab = "",
+            yaxes = TRUE,
+            ylab = expression(Chlorophyll ~ Biomass ~ (kt)),
+            xaxes = FALSE)
+points(x, y, pch = 20, cex = 1.25)
+box(which = "plot", 
+      lty = "solid", 
+      lwd = 1, 
+      col = colvect("grey22", alpha = 0.9))
+
+# CHL Summed Magnitude
+par(mar = c(4, 5, 0, 3))
+y = bloom_2018$con/1000
+x = as.Date(as.numeric(bloom_2018$time))
+jamie_theme(x = x, 
+            y = y, 
+            #xlim = c(as.Date("2018-07-01"), as.Date("2018-11-05")),
+            dt = TRUE,
+            ylim = c(60, 145),
+            line = -1,
+            adj = 0.03,
+            main = "", 
+            xaxes = TRUE,
+            yaxes = TRUE,
+            xlab = "Date Time",
+            ylab = expression(Chlorophyll ~ (ug ~ m^{-3}))
+            )
+points(x, y,  pch = 20, cex = 1.25)
+box(which = "plot", 
+      lty = "solid", 
+      lwd = 1, 
+      col = colvect("grey22", alpha = 0.9))
+#dev.off()
+```
+
+```{r, fig.width=8, fig.height=5}
+wdmap = getMap(resolution = "high")
+
+x = -150
+y = 27
+a = 23*1e05
+r = sqrt(a/pi) 
+r = r/110.574 #latitude to meters
+
+plot(x, y, 
+     ylim = c(17, 37), 
+     xlim = c(-170, -125),
+     pch = 19,
+     ylab = "Latitude",
+     xlab = "Longitude")
+draw.circle(x, 
+            y, 
+            r,
+            border = colvect("grey22", alpha = 0.6),
+            lwd = 2,
+            nv  = 500,
+            lty = 2)
+plot(wdmap, 
+     xlim = e[1:2], 
+     ylim = e[3:4], 
+     asp = 1, 
+     bg = "black", 
+     border = "black", 
+     col = "black", 
+     #wrap = c(-180, 180), 
+     add = TRUE)
+grid(nx = NULL, # X-axis divided in two sections
+     ny = NULL, # Y-axis divided in three sections
+     lty = 2, 
+     col = colvect(c("gray69"), alpha = 0.5), lwd = 1)
+box(which = "plot", lty = "solid", lwd = 3, col = colvect("grey22", alpha = 0.9))
+```
+
+
+### Mixed Layer Depth
+```{r, message = FALSE, fig.show = "hold", out.width = "90%",  warning = FALSE}
+# Mixed Layer Depth
+curve = loess(mix$pres_adjusted ~ as.numeric(mix$time)) 
+curve = predict(curve, type = "response")
+
+jamie_theme(x = mix$time, y = mix$pres_adjusted, 
+            ylim = c(80, 0),
+            main = "2018 Bloom Mixed Layer Depth", 
+            xlab = "Date Time",
+            ylab = "Pressure [dbar]")
+points(mix$time, mix$pres_adjusted, pch = 20, cex = 0.6)
+points(mix$time, curve, pch = 20, cex = 1)
+points(bloom_2018$time, bloom_2018$mld, col = "red", lwd = 2, pch = 20)
+```
+
+## Argo-floats tracks  
+```{r,  fig.height=8, message = FALSE, fig.show = "hold",  warning = FALSE}
+# Float Tracks
+e = extent(-165, -132, 18, 37)
+wdmap = getMap(resolution = "high")
+
+#id <- unique(float[, c("longitude", "latitude", "float_serial_no", "time")])
+id <- unique(float[, c("longitude", "latitude", "platform_number", "time")])
+#id$float_serial_no <- as.factor(id$float_serial_no)
+id$float_serial_no <- as.factor(id$platform_number)
+#nb.cols <- length(unique(id$float_serial_no))
+nb.cols <- length(unique(id$platform_number))
+mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
+#levels(id$float_serial_no) <- mycolors
+levels(id$platform_number) <- mycolors
+
+jamie_theme(x = id$longitude, y = id$latitude, 
+            dt = FALSE,
+            main = "2018 bloom argo-floats tracks", 
+            xlab = "Longitude",
+            ylab = "Latitude",
+            xlim = e[1:2], 
+            ylim = e[3:4])
+sz <- scale01(id$time)
+points(id$longitude, id$latitude,
+       #col = as.character(id$float_serial_no),
+       col = as.character(id$platform_number),
+       cex = sz*1.5,
+       pch = 20) 
+plot(wdmap, 
+     xlim = e[1:2], 
+     ylim = e[3:4], 
+     asp = 1, 
+     bg = "black", 
+     border = "black", 
+     col = "black", 
+     #wrap = c(-180, 180), 
+     add = TRUE)
+box(which = "plot", lty = "solid", lwd = 3, col = colvect("grey22", alpha = 0.9))
+```
+
+
+
+
+

@@ -1,0 +1,390 @@
+---
+title: "Untitled"
+author: "Jamie Ash"
+date: "2022-11-06"
+output: html_document
+---
+
+```{r, warning=FALSE}
+# Climotology ------------------------------------------------------------------
+# Loading packages and all prewriten functions
+# setwd("C:\\Users\\james\\Desktop\\jamieslife\\analysis")
+source("libraries.R")
+source("functions.R")
+rasterOptions(maxmemory = 100e+10)
+
+lons = c(-158.25, -157.25)
+#lons = c(-158.05, -157.95)
+lats = c( 22.7,   22.8)
+e = extent(lons, lats)
+
+```
+
+
+# loading data via opendap had issues with over engineered function
+```{r, warning = FALSE, message = FALSE}
+lons = c(-159, -157)
+#lons = c(-158.05, -157.95)
+lats = c( 21,   23)
+e = extent(lons, lats)
+
+# Set variables
+lat_varid = "lat"
+lon_varid = "lon"
+sdate = as.Date("1997-06-01")
+edate = as.Date("2021-11-01")
+var = "CHL"
+url = "https://jash:5.Pellegrino@my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D?"
+
+origin = "1900-01-01"
+
+data = nc_open(url, verbose = FALSE, write = FALSE)
+lat  = ncvar_get(data, varid = lat_varid)
+lon  = ncvar_get(data, varid = lon_varid)
+time = ncvar_get(data, varid = "time")
+time = as.Date(time, origin = origin)
+
+idx_lat <- which(lat > lats[1] & lat < lats[2])
+idx_lon <- which(lon > lons[1] & lon < lons[2])
+idx_time <- which(time >= sdate & time <= edate)
+
+
+idx_ras <- paste("CHL",
+                 paste("[", range(idx_time)[1], ":1:", range(idx_time)[2], "]", sep = ""),
+                 paste("[", range(idx_lat)[1],  ":1:", range(idx_lat)[2],  "]", sep = ""),
+                 paste("[", range(idx_lon)[1],  ":1:", range(idx_lon)[2],  "]", sep = ""),
+                 sep = "")
+
+idx_time <- paste("time", paste("[", range(idx_time)[1], ":1:",range(idx_time)[2], "]", sep = ""), sep = "")
+idx_lat  <- paste(lat_varid, paste("[", range(idx_lat)[1], ":1:",range(idx_lat)[2],  "]", sep = ""), sep = "")
+idx_lon  <- paste(lon_varid, paste("[", range(idx_lon)[1], ":1:",range(idx_lon)[2],  "]", sep = ""), sep = "")
+idx <- paste(idx_lat, idx_lon, idx_time, idx_ras, sep = ",")
+
+url <- paste(url, idx, sep = "")
+
+nc_close(data)
+rm(data)
+
+data = nc_open(url, verbose = FALSE, write = FALSE)
+
+lat  = ncvar_get(data, varid = lat_varid)
+lon  = ncvar_get(data, varid = lon_varid)
+time = ncvar_get(data, varid = "time")
+time = as.Date(time, origin = origin)
+ras  = ncvar_get(data)
+nc_close(data)
+
+s = dim(ras)
+ras = raster::brick(ras)
+ras = t(ras)
+ras = setZ(ras, z = as.Date(time, origin = org), name = "time")
+extent(ras) = extent(min(lons), max(lons), min(lats), max(lats))
+
+chl = ras
+rm(ras)
+gc()
+```
+
+```{r, warning=FALSE}
+# I'm uploading the large data set for the anomaly calculation
+
+# nope it's missing data. Could be fucking me for the sla matchup analysis too
+# chl = load_nc(path = "..//data//chl//",
+#               patt = "chl_20020101_20210105.nc",
+#               vars = c("lats", "lons", "value", "time"),
+#               origin = "1970-01-01")
+# # I saved chl incorrectly
+# c_e = extent(chl)
+# extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
+# rm(c_e)
+# gc()
+# 
+lons = c(-158.1, -157.95)
+lats = c( 22.65,   22.8)
+e = extent(lons, lats)
+chl = raster::crop(chl, e)
+dim(chl)
+```
+
+checking oreantation of CHL
+```{r}
+# c_e = extent(chl)
+# extent(chl) = extent(c_e[3], c_e[4], c_e[1], c_e[2])
+# temp = calc(chl[[1:16]], fun = mean, na.rm = TRUE)
+# 
+# lons = c(-160, -155)
+# lats = c( 20,   25)
+# e = extent(lons, lats)
+# chl = raster::crop(temp, e)
+# 
+# plot(chl)
+```
+
+
+load hplc data
+
+```{r, warning=FALSE}
+# Load the HPLC Data text file from HOT_DOGS webserver
+hplc <- data.frame(fread("..//data//hotdogs//HPLC_HOT_19881001_20211203.txt", 
+                           colClasses = c(rep("character", 6)), 
+                           header=TRUE),
+                     stringsAsFactors = FALSE)
+colnames(hplc) <- c("id", "date", "time", "press", "chl", "NA")
+```
+
+Could try apply a gassion running smoother like I did for the magnitude
+satelite data is gotten noisy in the last few years
+
+```{r, warning=FALSE}
+c_t = getZ(chl)
+c_u = cellStats(chl, stat = mean, na.rm = TRUE)
+
+sat = data.frame(c_t, c_u)
+colnames(sat) = c("time", "chlu")
+sat$month = months(sat$time)
+sat$month = factor(sat$month, levels = month.name)
+
+sat = data.frame(chl = sat$chlu, month = sat$month, time = sat$time)
+sat$ID = "satelite"
+sat$ID = as.factor(sat$ID)
+```
+
+processing HPLC data
+I should still probably average HPLC data from the same day across depth
+
+```{r}
+# convert the odd datetype to Postix
+time   = as.POSIXct(hplc$date, format="%m%d%y")
+hplc <- data.frame(apply(hplc[,c("press", "chl")], 
+                           MARGIN=2, 
+                           FUN=as.numeric))
+
+hplc      <- cbind(hplc, time) # create a dataframe
+hplc$chl <- hplc$chl/1000 # convert ng to mg
+hplc$time <- as.Date(hplc$time) # that Postix is now a date class
+hplc        <- hplc[which(hplc$press < 27), ] # We only want the upper 25m
+
+# Remove old data dates
+ind   <- which(hplc$time >   as.Date(min(sat$time)))
+                 #as.Date("1997-06-01")) #as.Date(min(sat$time)))
+hplc  <- hplc[ind,] 
+
+# botlle samples used for paper reference
+n = length(unique(hplc$time))
+
+# find average of all depth samples 5m and 25m
+hplc = aggregate(chl ~ time, data = hplc, FUN = mean, na.rm = TRUE)
+
+# months for idk
+hplc$month <- months(hplc$time)
+```
+
+Merge HPLC and Satelite into one data frame to make a goruped boxplot
+```{r}
+# be carefull here the months are not ordered correctly
+hplc$month = factor(hplc$month, levels = month.name)
+hplc$ID = as.factor("hplc")
+
+hplc = hplc[, c("chl", "month", "ID", "time")]
+sat = sat[, c("chl", "month", "ID", "time")]
+```
+
+Fixin date times
+```{r}
+
+# if I match hplc to sat I just need to make sure the cardinality of hplc is 
+# idx = hplc$time < max(sat$time)
+# hplc = hplc[idx, ]
+
+# both need to be true and I'm gutch
+max(hplc$time) < max(sat$time)
+min(hplc$time) > min(sat$time)
+
+# this can't be right
+box_df = rbind(sat, hplc)
+box_df = box_df[order(box_df$month),]
+
+# indexing closest value very manually because something is up
+j = 0
+idx = vector()
+for(i in 1:nrow(hplc)){
+  idx[i] = which(abs(sat$time - hplc$time[i]) == min(abs(sat$time - hplc$time[i])))
+}
+
+j = 0
+cu = vector()
+for(i in idx){
+  j = j+1
+  cu[j] = mean(sat$chl[(i-1):(i+1)], na.rm = TRUE)
+}
+
+
+
+# there should not be any duplicated values
+duplicated(idx)
+
+calib = data.frame(time = hplc$time, sat_chl = cu, hplc_chl = hplc$chl)
+
+# I thin this could be matching points far in time
+# calib = merge(sat, hplc, by = "time", sort = FALSE)
+ 
+# calib = calib[, c("time", "chl.x", "chl.y")]
+# colnames(calib) = c("time", "sat_chl", "hplc_chl")
+```
+
+```{r, eval = FALSE}
+# GLM ussing Gamma Log transform x ---------------------------------------------
+library(MASS)
+library(ggeffects)
+
+x <- calib$hplc_chl
+y <- calib$sat_chl
+data <- data.frame(y, x)  #dataset
+
+glmGamma <- glm(y ~ x, data = data, family = Gamma(link = "identity"))
+glm_0 <- glm(y ~ 1, data = data, family = Gamma(link = "identity"))
+
+model1 <- summary(glmGamma)
+anova(glmGamma, glm_0, test = "F")
+
+m  <- round(model1$coefficients[2], 3)
+b  <- round(model1$coefficients[1], 3)
+r2 <- round(1 - model1$deviance/model1$null.deviance, 3)
+```
+
+Boxplot
+```{r, fig.width=8, fig.height=7}
+layout( matrix(c(1,
+                 2),
+               ncol = 1,
+               nrow = 2, 
+               byrow = TRUE),
+        heights = c(1.85, 1))
+
+plotit(x = x, y = y, abline = c(m, b, r2),
+       tex_x = 0.15,
+       tex_y = 0.05,
+       xlab = "HPLC Bottle Samples [mg/L]",
+       ylab = "GlobColor Daily GSM CHL1 L3 [mg/m^3]",
+       sub = "a)",
+       ylim = c(0.02, 0.25),
+       xlim = c(0.02, 0.25),
+       line = -1.2,
+       adj = 0.05,
+       mar = c(5, 5, 5, 5))
+title("HPLC to CHLsat Comparison and CHL Seasonality", line = 1, adj = 0, cex.main = 1.5)
+
+boxit(x2 = box_df$month,
+      x1 = box_df$ID,
+      col = colvect(c("ivory4", "grey22"), alpha = c(0.5,0.9)),
+      add = FALSE,
+      y = box_df$chl,
+      ylim = c(0.025, 0.2),
+      legend = c("HPLC", "Satelite"),
+      data = box_df,
+      labels = as.character(1:12),
+      at = seq(from = 1, to = 24, by = 2) + 0.5,
+      sub = "b)",
+      xlab = "Month of year",
+      ylab = "Mean CHL [mg/m^3]",
+      line = -1.1,
+      adj = 0.025,
+      mar = c(5, 5, 3, 3))
+```
+
+plotting the box by itself
+```{r,fig.width=8}
+boxit(x2 = box_df$month,
+      x1 = box_df$ID,
+      col = colvect(c("ivory4", "grey22"), alpha = c(0.5,0.9)),
+      add = FALSE,
+      y = box_df$chl,
+      ylim = c(0.025, 0.22),
+      legend = c("HPLC", "Satelite"),
+      data = box_df,
+      labels = as.character(1:12),
+      at = seq(from = 1, to = 24, by = 2) + 0.5,
+      sub = "b)",
+      xlab = "Month of year",
+      ylab = "Mean CHL [mg/m^3]",
+      line = -1.1,
+      adj = 0.025,
+      mar = c(5, 5, 3, 3))
+```
+
+
+plotting the scatter by itself
+```{r, fig.asp=1}
+n = length(y) - sum(is.na(y))
+
+plotit(x = x, y = y, abline = c(m, b, r2),
+       tex_x = 0.2,
+       tex_y = 0.2,
+       pch = 4,
+       xlab = "HPLC Bottle Samples [mg/L]",
+       ylab = "GlobColor Daily GSM CHL1 L3 [mg/m^3]",
+       sub = "a)",
+       ylim = c(0.02, 0.25),
+       xlim = c(0.02, 0.25),
+       line = -1.2,
+       adj = 0.05,
+       mar = c(5, 5, 5, 5))
+#title("HPLC to CHLsat Comparison and CHL Seasonality", line = 1, adj = 0, cex.main = 1.5)
+text(0.2, 0.18, labels = paste("n =", as.character(n), sep = " "))
+```
+
+```{r}
+# calcualting a chl anomaly
+# hplc$chlr <- with(hplc, chl - ave(chl, month, na.rm = TRUE))
+# sat$chlr <- with(sat, chl - ave(sat$chl, sat$month, 
+#                                 FUN = function(x) mean(x, na.rm = TRUE)))
+# 
+# glmGamma <- glm(y ~ x, data = data, family = gaussian)
+# glm_0 <- glm(y ~ 1, data = data, family = gaussian)
+
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
